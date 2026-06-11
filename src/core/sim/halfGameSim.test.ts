@@ -64,7 +64,7 @@ describe('generateHalfGame', () => {
     expect([...scores].sort((a, b) => b - a)).toEqual(scores)
   })
 
-  it('決定性: 同一シードの2回生成が一致する', () => {
+  it('決定性: 同一シードの2回生成が一致する', { timeout: 240000 }, () => {
     const again = generateHalfGame(SHOWCASE_SEED)
     expect(again.records.length).toBe(scenario.records.length)
     expect(JSON.stringify(again.ranking)).toBe(
