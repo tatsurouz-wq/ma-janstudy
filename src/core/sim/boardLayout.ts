@@ -16,9 +16,11 @@ const HAND_PITCH = TILE_WIDTH + 0.012
 const RIVER_PITCH = TILE_WIDTH + 0.012
 const RIVER_ROW_PITCH = TILE_LENGTH + 0.02
 const HAND_EDGE_Z = 3.3
+const STAGING_EDGE_Z = 2.92
 const WALL_EDGE_Z = 2.42
 const RIVER_EDGE_Z = 1.3
 const WIN_REVEAL_Z = 2.0
+const STAGING_BLOCK_GAP = 0.07
 
 export interface Pose {
   readonly p: readonly [number, number, number]
@@ -38,20 +40,41 @@ const rotateAroundY = (
   return [x * cos + z * sin, -x * sin + z * cos]
 }
 
-const seatLocalPose = (
+const seatPosition = (
   seat: SeatId,
   localX: number,
   y: number,
   localZ: number,
-  localEuler: readonly [number, number, number],
-): Pose => {
-  const angle = seatAngle(seat)
-  const [x, z] = rotateAroundY(localX, localZ, angle)
-  return {
-    p: [x, y, z],
-    e: [localEuler[0], localEuler[1] + angle, localEuler[2]],
-  }
+): readonly [number, number, number] => {
+  const [x, z] = rotateAroundY(localX, localZ, seatAngle(seat))
+  return [x, y, z]
 }
+
+const standingPose = (
+  seat: SeatId,
+  localX: number,
+  localZ: number,
+  leanBack: number,
+): Pose => ({
+  p: seatPosition(seat, localX, STANDING_Y, localZ),
+  e: [leanBack, seatAngle(seat), 0],
+})
+
+const lyingPose = (
+  seat: SeatId,
+  localX: number,
+  y: number,
+  localZ: number,
+  faceUp: boolean,
+  extraYaw = 0,
+): Pose => ({
+  p: seatPosition(seat, localX, y, localZ),
+  e: [
+    faceUp ? -Math.PI / 2 : Math.PI / 2,
+    0,
+    seatAngle(seat) + extraYaw,
+  ],
+})
 
 export interface WallSlot {
   readonly side: SeatId
@@ -83,17 +106,27 @@ export const wallSlotSequence = (
   return mutableSlots
 }
 
+export const deadWallSlot = (
+  dice: readonly [number, number],
+  dealer: SeatId,
+  deadIndex: number,
+): WallSlot | undefined =>
+  wallSlotSequence(dice, dealer)[LIVE_WALL_SIZE + deadIndex]
+
 const wallSlotPose = (slot: WallSlot, faceUp: boolean): Pose => {
   const localX = (slot.column - (WALL_COLUMNS - 1) / 2) * WALL_PITCH
-  const y =
-    slot.level === 0
-      ? LYING_Y
-      : LYING_Y + TILE_THICKNESS
-  return seatLocalPose(slot.side, localX, y, WALL_EDGE_Z, [
-    faceUp ? -Math.PI / 2 : Math.PI / 2,
-    0,
-    0,
-  ])
+  const y = slot.level === 0 ? LYING_Y : LYING_Y + TILE_THICKNESS
+  return lyingPose(slot.side, localX, y, WALL_EDGE_Z, faceUp)
+}
+
+export const wallTilePoseAt = (
+  dice: readonly [number, number],
+  dealer: SeatId,
+  sequenceIndex: number,
+  faceUp: boolean,
+): Pose => {
+  const slot = wallSlotSequence(dice, dealer)[sequenceIndex]
+  return slot === undefined ? INSIDE_MACHINE_POSE : wallSlotPose(slot, faceUp)
 }
 
 export const handTilePose = (
@@ -105,11 +138,13 @@ export const handTilePose = (
   const drawnGap = drawn ? 0.18 : 0
   const localX = (index - 6) * HAND_PITCH + drawnGap
   const leanBack = seat === userSeat ? -0.18 : 0
-  return seatLocalPose(seat, localX, STANDING_Y, HAND_EDGE_Z, [
-    leanBack,
-    0,
-    0,
-  ])
+  return standingPose(seat, localX, HAND_EDGE_Z, leanBack)
+}
+
+export const stagingTilePose = (seat: SeatId, index: number): Pose => {
+  const blockGap = Math.floor(index / 4) * STAGING_BLOCK_GAP
+  const localX = (index - 6.5) * (TILE_WIDTH + 0.006) + blockGap - 0.1
+  return lyingPose(seat, localX, LYING_Y, STAGING_EDGE_Z, false)
 }
 
 export const riverTilePose = (
@@ -121,20 +156,19 @@ export const riverTilePose = (
   const column = row >= 3 ? index - 18 + 6 : index % 6
   const localX = (column - 2.5) * RIVER_PITCH + (riichiTilt ? 0.03 : 0)
   const localZ = RIVER_EDGE_Z + row * RIVER_ROW_PITCH
-  return seatLocalPose(seat, localX, LYING_Y, localZ, [
-    -Math.PI / 2,
+  return lyingPose(
+    seat,
+    localX,
+    LYING_Y,
+    localZ,
+    true,
     riichiTilt ? Math.PI / 2 : 0,
-    0,
-  ])
+  )
 }
 
 export const winRevealPose = (seat: SeatId, index: number): Pose => {
   const localX = (index - 6.5) * HAND_PITCH
-  return seatLocalPose(seat, localX, LYING_Y, WIN_REVEAL_Z, [
-    -Math.PI / 2,
-    0,
-    0,
-  ])
+  return lyingPose(seat, localX, LYING_Y, WIN_REVEAL_Z, true)
 }
 
 export const INSIDE_MACHINE_POSE: Pose = {
@@ -149,23 +183,21 @@ export interface LayoutContext {
 }
 
 export const tilePoseFor = (zone: TileZone, ctx: LayoutContext): Pose => {
+  const dice = ctx.dice ?? [1, 1]
   switch (zone.kind) {
-    case 'wall': {
-      const sequence = wallSlotSequence(ctx.dice ?? [1, 1], ctx.dealer)
-      const slot = sequence[zone.drawIndex]
-      return slot === undefined
-        ? INSIDE_MACHINE_POSE
-        : wallSlotPose(slot, false)
-    }
-    case 'deadWall': {
-      const sequence = wallSlotSequence(ctx.dice ?? [1, 1], ctx.dealer)
-      const slot = sequence[LIVE_WALL_SIZE + zone.index]
-      return slot === undefined
-        ? INSIDE_MACHINE_POSE
-        : wallSlotPose(slot, zone.faceUp)
-    }
+    case 'wall':
+      return wallTilePoseAt(dice, ctx.dealer, zone.drawIndex, false)
+    case 'deadWall':
+      return wallTilePoseAt(
+        dice,
+        ctx.dealer,
+        LIVE_WALL_SIZE + zone.index,
+        zone.faceUp,
+      )
     case 'hand':
       return handTilePose(zone.seat, zone.index, zone.drawn, ctx.userSeat)
+    case 'handStaging':
+      return stagingTilePose(zone.seat, zone.index)
     case 'river':
       return riverTilePose(zone.seat, zone.index, zone.riichiTilt)
     case 'winReveal':

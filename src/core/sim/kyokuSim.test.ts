@@ -29,7 +29,7 @@ describe('simulateKyoku', () => {
     expect(JSON.stringify(a.events)).toBe(JSON.stringify(b.events))
   })
 
-  it('イベント列は kyokuStart→shuffle→wallRise→dice→deal で始まり kyokuEnd で終わる', () => {
+  it('イベント列は kyokuStart→shuffle→wallRise→dice→dealBlock で始まり kyokuEnd で終わる', () => {
     const outcome = run(1)
     const kinds = outcome.events.map((e) => e.kind)
     expect(kinds.slice(0, 5)).toEqual([
@@ -37,24 +37,72 @@ describe('simulateKyoku', () => {
       'shuffle',
       'wallRise',
       'dice',
-      'deal',
+      'dealBlock',
     ])
     expect(kinds.at(-1)).toBe('kyokuEnd')
     expect(kinds.at(-2)).toBe('payment')
   })
 
-  it('配牌は各家13枚、wallRiseは136枚', () => {
+  it('配牌は4枚ブロック12回+1枚ずつ4回+親のチョンチョン1回', () => {
+    const outcome = run(1)
+    const blocks = outcome.events.filter((e) => e.kind === 'dealBlock')
+    expect(blocks).toHaveLength(17)
+    const sizes = blocks.map((e) =>
+      e.kind === 'dealBlock' ? e.tiles.length : 0,
+    )
+    expect(sizes.slice(0, 12)).toEqual(Array.from({ length: 12 }, () => 4))
+    expect(sizes.slice(12)).toEqual([1, 1, 1, 1, 1])
+    const last = blocks.at(-1)
+    if (last?.kind === 'dealBlock') {
+      expect(last.seat).toBe(0)
+    }
+  })
+
+  it('親は最初のツモなしで第一打する（チョンチョンが14枚目）', () => {
+    const outcome = run(1)
+    const kinds = outcome.events.map((e) => e.kind)
+    const firstDiscard = kinds.indexOf('discard')
+    const firstDraw = kinds.indexOf('draw')
+    expect(firstDiscard).toBeGreaterThan(-1)
+    if (firstDraw !== -1) {
+      expect(firstDiscard).toBeLessThan(firstDraw)
+    }
+    const discard = outcome.events[firstDiscard]
+    if (discard?.kind === 'discard') {
+      expect(discard.seat).toBe(0)
+    }
+  })
+
+  it('dealDoraでドラ表示牌がfaceUpになる', () => {
+    const outcome = run(1)
+    const doraIndex = outcome.events.findIndex((e) => e.kind === 'dealDora')
+    expect(doraIndex).toBeGreaterThan(-1)
+    const before = outcome.events
+      .slice(0, doraIndex)
+      .reduce(applyEvent, INITIAL_BOARD)
+    const after = applyEvent(before, outcome.events[doraIndex] as never)
+    const faceUpBefore = [...before.tiles.values()].filter(
+      (p) => p.zone.kind === 'deadWall' && p.zone.faceUp,
+    )
+    const faceUpAfter = [...after.tiles.values()].filter(
+      (p) => p.zone.kind === 'deadWall' && p.zone.faceUp,
+    )
+    expect(faceUpBefore).toHaveLength(0)
+    expect(faceUpAfter).toHaveLength(1)
+  })
+
+  it('配牌完了時点で親は14枚・子は13枚、wallRiseは136枚', () => {
     const outcome = run(2)
-    const deal = outcome.events.find((e) => e.kind === 'deal')
+    const dealSort = outcome.events.find((e) => e.kind === 'dealSort')
     const wallRise = outcome.events.find((e) => e.kind === 'wallRise')
-    if (deal?.kind !== 'deal' || wallRise?.kind !== 'wallRise') {
+    if (dealSort?.kind !== 'dealSort' || wallRise?.kind !== 'wallRise') {
       throw new Error('イベントが見つかりません')
     }
     expect(wallRise.tiles).toHaveLength(136)
     expect(new Set(wallRise.tiles.map((t) => t.id)).size).toBe(136)
-    for (const hand of deal.hands) {
-      expect(hand).toHaveLength(13)
-    }
+    dealSort.hands.forEach((hand, seat) => {
+      expect(hand).toHaveLength(seat === 0 ? 14 : 13)
+    })
   })
 
   it('点数移動後の4人合計+供託は常に100000点', { timeout: 120000 }, () => {

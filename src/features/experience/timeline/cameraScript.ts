@@ -1,6 +1,10 @@
 import type { ScenarioEvent } from '@/core/sim/scenarioEvents'
 import type { SeatId } from '@/core/sim/seatTypes'
-import { seatAngle } from '@/core/sim/boardLayout'
+import { seatAngle, wallTilePoseAt } from '@/core/sim/boardLayout'
+import {
+  DORA_INDICATOR_DEAD_INDEX,
+  LIVE_WALL_SIZE,
+} from '@/core/sim/scenarioEvents'
 import type {
   CameraClip,
   CameraPose,
@@ -149,6 +153,8 @@ export const cameraPlanFor = (
     readonly userSeat: SeatId
     readonly drawCountInKyoku: number
     readonly duration: number
+    readonly dice: readonly [number, number]
+    readonly dealer: SeatId
   },
 ): EventCameraPlan => {
   const { userSeat, drawCountInKyoku, duration } = context
@@ -182,26 +188,67 @@ export const cameraPlanFor = (
           },
         ],
       }
-    case 'deal': {
-      const phase = duration / 3
+    case 'dealBlock': {
+      if (event.blockIndex === 0) {
+        return {
+          shots: [
+            {
+              to: seatFocusView(context.dealer, 44),
+              offset: 0,
+              duration: 0.9,
+              transition: 'cut',
+            },
+          ],
+        }
+      }
+      if (event.blockIndex === 4) {
+        return {
+          shots: [{ to: WIDE_VIEW, offset: 0, duration: 0.8 }],
+        }
+      }
+      if (event.seat === userSeat && event.blockIndex === 12) {
+        return {
+          shots: [
+            { to: HAND_VIEW, offset: 0, duration: 0.7, transition: 'cut' },
+          ],
+        }
+      }
+      return { shots: [] }
+    }
+    case 'dealDora': {
+      const indicatorPose = wallTilePoseAt(
+        context.dice,
+        context.dealer,
+        LIVE_WALL_SIZE + DORA_INDICATOR_DEAD_INDEX,
+        true,
+      )
       return {
         shots: [
           {
-            to: seatFocusView(0, 44),
-            offset: 0,
-            duration: 1.0,
+            to: {
+              position: [
+                indicatorPose.p[0] * 0.45,
+                2.4,
+                indicatorPose.p[2] * 0.45 + 3.6,
+              ],
+              lookAt: indicatorPose.p,
+              fov: 30,
+            },
+            offset: 0.15,
+            duration: 0.9,
             transition: 'cut',
           },
-          {
-            to: HAND_VIEW,
-            offset: phase,
-            duration: 1.0,
-            transition: 'cut',
-          },
+        ],
+      }
+    }
+    case 'dealSort': {
+      return {
+        shots: [
+          { to: HAND_VIEW, offset: 0, duration: 0.8, transition: 'cut' },
           {
             to: WIDE_VIEW,
-            offset: phase * 2,
-            duration: phase,
+            offset: Math.max(duration - 1.0, 0.9),
+            duration: 1.0,
           },
         ],
       }

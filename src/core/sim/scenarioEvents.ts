@@ -55,9 +55,15 @@ export type ScenarioEvent =
   | { readonly kind: 'wallRise'; readonly tiles: readonly TileInstance[] }
   | { readonly kind: 'dice'; readonly values: readonly [number, number] }
   | {
-      readonly kind: 'deal'
+      readonly kind: 'dealBlock'
+      readonly seat: SeatId
+      readonly tiles: readonly TileInstance[]
+      readonly blockIndex: number
+    }
+  | { readonly kind: 'dealDora'; readonly doraIndicator: TileInstance }
+  | {
+      readonly kind: 'dealSort'
       readonly hands: readonly (readonly TileInstance[])[]
-      readonly doraIndicator: TileInstance
     }
   | { readonly kind: 'boardSnapshot'; readonly board: SnapshotBoard }
   | { readonly kind: 'draw'; readonly seat: SeatId; readonly tile: TileInstance }
@@ -100,6 +106,11 @@ export type TileZone =
       readonly seat: SeatId
       readonly index: number
       readonly drawn: boolean
+    }
+  | {
+      readonly kind: 'handStaging'
+      readonly seat: SeatId
+      readonly index: number
     }
   | {
       readonly kind: 'river'
@@ -260,16 +271,25 @@ export const applyEvent = (
         ...board,
         display: { ...board.display, dice: event.values },
       }
-    case 'deal': {
+    case 'dealBlock': {
+      const stagingCount = [...board.tiles.values()].filter(
+        (p) => p.zone.kind === 'handStaging' && p.zone.seat === event.seat,
+      ).length
       const mutableTiles = new Map(board.tiles)
-      event.hands.forEach((hand, seatIndex) => {
-        hand.forEach((tile) => {
-          mutableTiles.set(tile.id, {
-            tile,
-            zone: { kind: 'hand', seat: seatIndex as SeatId, index: 0, drawn: false },
-          })
+      event.tiles.forEach((tile, i) => {
+        mutableTiles.set(tile.id, {
+          tile,
+          zone: {
+            kind: 'handStaging',
+            seat: event.seat,
+            index: stagingCount + i,
+          },
         })
       })
+      return { ...board, tiles: mutableTiles }
+    }
+    case 'dealDora': {
+      const mutableTiles = new Map(board.tiles)
       const indicator = mutableTiles.get(event.doraIndicator.id)
       if (indicator !== undefined && indicator.zone.kind === 'deadWall') {
         mutableTiles.set(event.doraIndicator.id, {
@@ -277,6 +297,23 @@ export const applyEvent = (
           zone: { ...indicator.zone, faceUp: true },
         })
       }
+      return { ...board, tiles: mutableTiles }
+    }
+    case 'dealSort': {
+      const mutableTiles = new Map(board.tiles)
+      event.hands.forEach((hand, seatIndex) => {
+        hand.forEach((tile) => {
+          mutableTiles.set(tile.id, {
+            tile,
+            zone: {
+              kind: 'hand',
+              seat: seatIndex as SeatId,
+              index: 0,
+              drawn: false,
+            },
+          })
+        })
+      })
       const resorted = [0, 1, 2, 3].reduce<ReadonlyMap<string, PlacedTile>>(
         (tiles, seat) => withResortedHand(tiles, seat as SeatId),
         mutableTiles,

@@ -2,6 +2,7 @@ import type { ScenarioEvent } from '@/core/sim/scenarioEvents'
 import type { SeatId } from '@/core/sim/seatTypes'
 import { SEAT_LABELS } from '@/core/sim/seatTypes'
 import type { ScoreResult, Wind } from '@/core/score/types'
+import { doraFromIndicator } from '@/core/score/dora'
 import type { CaptionSegment } from './timelineTypes'
 
 export interface CaptionScriptState {
@@ -109,7 +110,7 @@ export const captionFor = (
         minDuration: 4.4,
         learning: true,
       })
-    case 'deal':
+    case 'dealBlock':
       return once(state, 'deal', {
         segments: [
           text('配牌。山から4枚ずつ3回、最後に1枚ずつ取ります。親はさらに1枚多く取るため、'),
@@ -117,6 +118,33 @@ export const captionFor = (
           text('でスタートです。'),
         ],
         minDuration: 5.2,
+        learning: true,
+      })
+    case 'dealDora': {
+      const dora = doraFromIndicator(event.doraIndicator.tile)
+      return {
+        spec: {
+          segments: [
+            text('ドラ表示牌は'),
+            { kind: 'tile', tile: event.doraIndicator.tile },
+            text('。その次の'),
+            { kind: 'tile', tile: dora },
+            emphasis('がドラ'),
+            text('です。1枚持っているごとに1翻加算されます（表示牌そのものはドラではありません）。'),
+          ],
+          minDuration: 5.2,
+          learning: true,
+        },
+        state,
+      }
+    }
+    case 'dealSort':
+      return once(state, 'dealSort', {
+        segments: [
+          emphasis('理牌（リーパイ）'),
+          text('。種類と数字の順に並べ替えると、待ちの形が見やすくなります。'),
+        ],
+        minDuration: 4.4,
         learning: true,
       })
     case 'boardSnapshot':

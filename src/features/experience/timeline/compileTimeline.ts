@@ -60,8 +60,18 @@ const eventDuration = (
       return cursor.kyokuIndex <= 1 ? 3 : 1.6
     case 'dice':
       return cursor.kyokuIndex <= 1 ? 3.5 : 1.6
-    case 'deal':
-      return cursor.kyokuIndex <= 1 ? 9 : 5
+    case 'dealBlock':
+      return cursor.kyokuIndex <= 1
+        ? event.tiles.length === 4
+          ? 0.55
+          : 0.45
+        : event.tiles.length === 4
+          ? 0.3
+          : 0.25
+    case 'dealDora':
+      return cursor.kyokuIndex <= 1 ? 4 : 1.8
+    case 'dealSort':
+      return cursor.kyokuIndex <= 1 ? 2.6 : 1.6
     case 'boardSnapshot':
       return 1.6
     case 'draw':
@@ -111,38 +121,33 @@ interface MoveTiming {
 
 const moveTiming = (
   event: ScenarioEvent,
-  beforeZone: TileZone | null,
   afterZone: TileZone | null,
   rank: number,
-  eventDur: number,
 ): MoveTiming => {
   switch (event.kind) {
     case 'wallRise':
       return { start: 0.6, duration: 1.2, arcHeight: 0, easing: 'outQuint' }
-    case 'deal': {
-      if (beforeZone?.kind === 'wall') {
-        const group = Math.floor(rank / 4)
-        const start =
-          rank < 48
-            ? 0.4 + group * (eventDur * 0.55) / 12
-            : 0.4 + eventDur * 0.55 + (rank - 48) * 0.25
-        return { start, duration: 0.45, arcHeight: 0.4, easing: 'outQuint' }
-      }
-      if (afterZone?.kind === 'deadWall') {
-        return {
-          start: eventDur - 2.0,
-          duration: 0.8,
-          arcHeight: 0.25,
-          easing: 'inOutCubic',
-        }
-      }
+    case 'dealBlock':
       return {
-        start: eventDur - 1.4 + rank * 0.04,
-        duration: 0.35,
-        arcHeight: 0.05,
+        start: 0.05 + rank * 0.04,
+        duration: 0.4,
+        arcHeight: 0.35,
         easing: 'outQuint',
       }
-    }
+    case 'dealDora':
+      return {
+        start: 0.3,
+        duration: 0.9,
+        arcHeight: 0.3,
+        easing: 'inOutCubic',
+      }
+    case 'dealSort':
+      return {
+        start: 0.1 + rank * 0.05,
+        duration: 0.5,
+        arcHeight: 0.25,
+        easing: 'outQuint',
+      }
     case 'draw':
       return { start: 0, duration: 0.5, arcHeight: 0.35, easing: 'outQuint' }
     case 'discard':
@@ -186,7 +191,6 @@ const tileClipsFor = (
   after: BoardState,
   cursor: CompileCursor,
   t: number,
-  eventDur: number,
 ): readonly TileMoveClip[] => {
   const ctx = layoutCtx(cursor)
   
@@ -243,13 +247,7 @@ const tileClipsFor = (
 
   const sorted = [...mutableMoves].sort((a, b) => a.sortKey - b.sortKey)
   return sorted.map((move, rank) => {
-    const timing = moveTiming(
-      event,
-      move.beforeZone,
-      move.afterZone,
-      rank,
-      eventDur,
-    )
+    const timing = moveTiming(event, move.afterZone, rank)
     return {
       track: 'tile' as const,
       tileId: move.tileId,
@@ -406,13 +404,15 @@ export const compileTimeline = (
 
     mutableEventTimes.push({ t, eventIndex })
     mutableClips.push(
-      ...tileClipsFor(event, cursor.board, after, cursor, t, duration),
+      ...tileClipsFor(event, cursor.board, after, cursor, t),
     )
 
     const plan = cameraPlanFor(event, {
       userSeat: scenario.userSeat,
       drawCountInKyoku: cursor.drawCountInKyoku,
       duration,
+      dice: cursor.dice,
+      dealer: cursor.dealer,
     })
     const mutableCameraState = { value: cursor.cameraState }
     for (const shot of plan.shots) {
@@ -461,7 +461,7 @@ export const compileTimeline = (
       case 'machineStart':
         addChapter('start', '卓起動', eventIndex)
         break
-      case 'deal':
+      case 'dealBlock':
         addChapter('deal', '配牌', eventIndex)
         break
       case 'draw':

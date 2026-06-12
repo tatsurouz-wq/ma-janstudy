@@ -158,24 +158,6 @@ export const simulateKyoku = (
 
   const mutableHands: TileInstance[][] = [[], [], [], []]
   const mutableDealIndex = { value: 0 }
-  for (let block = 0; block < 3; block += 1) {
-    for (const seat of order) {
-      mutableHands[seat]?.push(
-        ...liveWallAll.slice(mutableDealIndex.value, mutableDealIndex.value + 4),
-      )
-      mutableDealIndex.value += 4
-    }
-  }
-  for (const seat of order) {
-    const tile = liveWallAll[mutableDealIndex.value]
-    if (tile !== undefined) {
-      mutableHands[seat]?.push(tile)
-    }
-    mutableDealIndex.value += 1
-  }
-  const mutableLive = [...liveWallAll.slice(mutableDealIndex.value)]
-
-  const ctx: SimContext = { config, doraIndicator, uraIndicator }
   const mutableEvents: ScenarioEvent[] = [
     {
       kind: 'kyokuStart',
@@ -190,12 +172,40 @@ export const simulateKyoku = (
     { kind: 'shuffle' },
     { kind: 'wallRise', tiles: wallTiles },
     { kind: 'dice', values: dice },
-    {
-      kind: 'deal',
-      hands: mutableHands.map((h) => [...h]),
-      doraIndicator,
-    },
   ]
+  const mutableBlockIndex = { value: 0 }
+  const takeBlock = (seat: SeatId, count: number) => {
+    const tiles = liveWallAll.slice(
+      mutableDealIndex.value,
+      mutableDealIndex.value + count,
+    )
+    mutableDealIndex.value += count
+    mutableHands[seat]?.push(...tiles)
+    mutableEvents.push({
+      kind: 'dealBlock',
+      seat,
+      tiles,
+      blockIndex: mutableBlockIndex.value,
+    })
+    mutableBlockIndex.value += 1
+  }
+  for (let block = 0; block < 3; block += 1) {
+    for (const seat of order) {
+      takeBlock(seat, 4)
+    }
+  }
+  for (const seat of order) {
+    takeBlock(seat, 1)
+  }
+  takeBlock(config.dealer, 1)
+  const dealerExtra = mutableHands[config.dealer]?.at(-1) as TileInstance
+  const mutableLive = [...liveWallAll.slice(mutableDealIndex.value)]
+
+  const ctx: SimContext = { config, doraIndicator, uraIndicator }
+  mutableEvents.push(
+    { kind: 'dealDora', doraIndicator },
+    { kind: 'dealSort', hands: mutableHands.map((h) => [...h]) },
+  )
 
   const mutableSeats: SeatState[] = [0, 1, 2, 3].map((seat) => ({
     hand: mutableHands[seat] ?? [],
@@ -252,12 +262,17 @@ export const simulateKyoku = (
 
   const mutableTurnPtr = { value: 0 }
   while (mutableLive.length > 0) {
+    const isFirstTurn = mutableTurnPtr.value === 0
     const seat = order[mutableTurnPtr.value % 4] as SeatId
     mutableTurnPtr.value += 1
-    const drawn = mutableLive.shift() as TileInstance
-    mutableEvents.push({ kind: 'draw', seat, tile: drawn })
     const seatState = mutableSeats[seat] as SeatState
-    const hand14 = [...seatState.hand, drawn]
+    const drawn = isFirstTurn
+      ? dealerExtra
+      : (mutableLive.shift() as TileInstance)
+    if (!isFirstTurn) {
+      mutableEvents.push({ kind: 'draw', seat, tile: drawn })
+    }
+    const hand14 = isFirstTurn ? [...seatState.hand] : [...seatState.hand, drawn]
     const isLastTile = mutableLive.length === 0
 
     const tsumoOutcome = calculateScore(
