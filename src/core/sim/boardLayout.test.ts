@@ -9,6 +9,7 @@ import {
   tilePoseFor,
   wallSlotSequence,
   wallTilePoseAt,
+  winRevealPose,
 } from './boardLayout'
 import { LIVE_WALL_SIZE } from './scenarioEvents'
 
@@ -66,6 +67,28 @@ describe('wallSlotSequence', () => {
     expect(first?.level).toBe(1)
     expect(second?.level).toBe(0)
     expect(first?.column).toBe(second?.column)
+  })
+
+  it('開門は割れ目から: 生牌の先頭と王牌の先頭は割れ目を挟んで隣接し、生牌は列を減らす方向へ進む', () => {
+    for (const dice of [
+      [1, 1],
+      [2, 5],
+      [4, 4],
+      [6, 6],
+    ] as const) {
+      for (const dealer of [0, 1, 2, 3] as const) {
+        const sequence = wallSlotSequence([dice[0], dice[1]], dealer)
+        const liveHead = sequence[0]
+        const liveSecond = sequence[2]
+        const deadHead = sequence[LIVE_WALL_SIZE]
+        // 生牌の先頭(割れ目の左)と王牌の先頭(割れ目の右)は同じ辺で隣接する。
+        expect(deadHead?.side).toBe(liveHead?.side)
+        expect((deadHead?.column ?? -9) - (liveHead?.column ?? 0)).toBe(1)
+        // 生牌は列を1つずつ減らす方向に消費する。
+        expect((liveHead?.column ?? 0) - (liveSecond?.column ?? 0)).toBe(1)
+        expect(liveHead?.level).toBe(1)
+      }
+    }
   })
 
   it('ドラ表示牌は王牌の3幢目・上段に出る（サイコロ値に依らない）', () => {
@@ -144,6 +167,36 @@ describe('poses', () => {
         uprightLong[2] * tiltedLong[2]
       expect(Math.abs(dot)).toBeLessThan(1e-6)
     }
+  })
+
+  it('河は3段目を作らず2段目を右に延長する（index12は2段目の左端）', () => {
+    const first = riverTilePose(1, 0, false)
+    const second = riverTilePose(1, 6, false)
+    const third = riverTilePose(1, 12, false)
+    // index 0/6/12 はいずれも各段の左端で、同じローカルX（同じ世界X）に並ぶ。
+    expect(third.p[0]).toBeCloseTo(first.p[0])
+    expect(third.p[0]).toBeCloseTo(second.p[0])
+    // 段が進むごとに手前から奥へ等間隔。
+    const gap1 = second.p[2] - first.p[2]
+    const gap2 = third.p[2] - second.p[2]
+    expect(gap2).toBeCloseTo(gap1)
+  })
+
+  it('リーチ宣言牌の後ろの同段牌は右へずれ、横向き牌と重ならない', () => {
+    const baseline = riverTilePose(1, 1, false, null)
+    const pushed = riverTilePose(1, 1, false, 0)
+    expect(pushed.p[0] - baseline.p[0]).toBeGreaterThan(0.05)
+    const riichiTile = riverTilePose(1, 0, true, 0)
+    // 横向き牌(半長0.13)と次の通常牌(半幅0.10)の中心間距離が0.23以上で重ならない。
+    const distance = Math.abs(pushed.p[0] - riichiTile.p[0])
+    expect(distance).toBeGreaterThanOrEqual(0.23)
+  })
+
+  it('和了の倒牌は河の2段目より手前に置かれ重ならない', () => {
+    const reveal = winRevealPose(1, 5)
+    const riverRow1 = riverTilePose(1, 11, false)
+    // 倒牌の手前端 > 河2段目の奥端（どちらも長辺0.26がZに沿う、半長0.13）。
+    expect(reveal.p[2] - 0.13).toBeGreaterThan(riverRow1.p[2] + 0.13)
   })
 
   it('山の牌は全座席で牌面が下を向き、表示牌だけ上を向く', () => {

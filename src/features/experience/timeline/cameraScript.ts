@@ -4,6 +4,7 @@ import { seatAngle, wallTilePoseAt } from '@/core/sim/boardLayout'
 import {
   DORA_INDICATOR_DEAD_INDEX,
   LIVE_WALL_SIZE,
+  URA_INDICATOR_DEAD_INDEX,
 } from '@/core/sim/scenarioEvents'
 import type {
   CameraClip,
@@ -206,7 +207,13 @@ export const cameraPlanFor = (
           shots: [{ to: WIDE_VIEW, offset: 0, duration: 0.8 }],
         }
       }
-      if (event.seat === userSeat && event.blockIndex === 12) {
+      // ユーザーの1枚取り（13枚目）。blockIndex 12-15 が各家の1枚取り、16 は親の
+      // チョンチョン。座席=ユーザーかつ1枚取り（チョンチョン以外）で手元に寄る。
+      if (
+        event.seat === userSeat &&
+        event.tiles.length === 1 &&
+        event.blockIndex < 16
+      ) {
         return {
           shots: [
             { to: HAND_VIEW, offset: 0, duration: 0.7, transition: 'cut' },
@@ -242,13 +249,15 @@ export const cameraPlanFor = (
       }
     }
     case 'dealSort': {
+      const wideOffset = Math.max(duration - 1.0, 0.9)
       return {
         shots: [
           { to: HAND_VIEW, offset: 0, duration: 0.8, transition: 'cut' },
           {
             to: WIDE_VIEW,
-            offset: Math.max(duration - 1.0, 0.9),
-            duration: 1.0,
+            offset: wideOffset,
+            // イベント長を超えて次イベント（boardSnapshot等）のカメラと重ならないよう収める。
+            duration: Math.min(1.0, Math.max(0.3, duration - wideOffset)),
           },
         ],
       }
@@ -312,7 +321,14 @@ export const cameraPlanFor = (
           },
         ],
       }
-    case 'win':
+    case 'win': {
+      // 裏ドラは王牌で捲れる。サイコロ・親で位置が変わるため実位置に寄る（ドラ表示と同様）。
+      const uraPose = wallTilePoseAt(
+        context.dice,
+        context.dealer,
+        LIVE_WALL_SIZE + URA_INDICATOR_DEAD_INDEX,
+        true,
+      )
       return {
         shots: [
           {
@@ -324,7 +340,15 @@ export const cameraPlanFor = (
           {
             to:
               event.uraIndicators.length > 0
-                ? { position: [0, 2.6, 5.2], lookAt: [0, 0.2, 2.3], fov: 28 }
+                ? {
+                    position: [
+                      uraPose.p[0] * 0.45,
+                      2.4,
+                      uraPose.p[2] * 0.45 + 3.6,
+                    ],
+                    lookAt: uraPose.p,
+                    fov: 28,
+                  }
                 : seatFocusView(event.seat, 30),
             offset: duration * 0.6,
             duration: 1.0,
@@ -332,6 +356,7 @@ export const cameraPlanFor = (
           },
         ],
       }
+    }
     case 'payment':
       return {
         shots: [

@@ -40,6 +40,20 @@ describe('compileTimeline', () => {
     }
   })
 
+  it('「対局開始」チャプターは親の第一打（最初のdiscard）に置かれる', () => {
+    const play = timeline.chapters.find((c) => c.id === 'play')
+    expect(play).toBeDefined()
+    const firstDiscardIndex = scenario.events.findIndex(
+      (e) => e.kind === 'discard',
+    )
+    const firstDrawIndex = scenario.events.findIndex((e) => e.kind === 'draw')
+    expect(firstDiscardIndex).toBeGreaterThan(-1)
+    // 親の第一打は最初のツモより前にある（チョンチョンの14枚目はツモを伴わない）。
+    expect(firstDiscardIndex).toBeLessThan(firstDrawIndex)
+    expect(play?.eventIndex).toBe(firstDiscardIndex)
+    expect(scenario.events[play?.eventIndex ?? -1]?.kind).toBe('discard')
+  })
+
   it('連続カメラ移動は角速度60度/s・移動量2.0unit以内（機械検証）', () => {
     const cameraClips = timeline.clips.filter((c) => c.track === 'camera')
     expect(cameraClips.length).toBeGreaterThan(10)

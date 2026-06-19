@@ -19,7 +19,8 @@ const HAND_EDGE_Z = 3.3
 const STAGING_EDGE_Z = 2.92
 const WALL_EDGE_Z = 2.42
 const RIVER_EDGE_Z = 1.3
-const WIN_REVEAL_Z = 2.0
+// 河の2段目(中心1.86, 上限約1.99)と倒牌列(半長0.13)が重ならないよう手前に置く。
+const WIN_REVEAL_Z = 2.15
 const STAGING_BLOCK_GAP = 0.07
 
 export interface Pose {
@@ -82,26 +83,47 @@ export interface WallSlot {
   readonly level: 0 | 1
 }
 
+// 実ルールの開門: サイコロ合計で割れ目（breakSide の breakColumn と breakColumn+1 の
+// 間）が決まり、配牌は割れ目の左側の幢から「列を減らす方向（卓に対して時計回り）」に
+// 消費する。王牌は割れ目の右側に7幢（14枚）残し、ドラ表示牌は割れ目側から3幢目の上段。
+// ここでは牌山をリングとして扱い、割れ目から live=61幢 / dead=7幢 を逆方向に列挙する。
 export const wallSlotSequence = (
   dice: readonly [number, number],
   dealer: SeatId,
 ): readonly WallSlot[] => {
   const sum = (dice[0] ?? 1) + (dice[1] ?? 1)
   const breakSide = (((dealer + sum - 1) % 4) + 4) % 4
-  const startColumn = Math.min(sum, WALL_COLUMNS - 1)
+  const breakColumn = WALL_COLUMNS - 1 - sum
   const mutableSlots: WallSlot[] = []
-  for (let sideOffset = 0; sideOffset < 4; sideOffset += 1) {
-    const side = (((breakSide + sideOffset) % 4) + 4) % 4
-    const fromColumn = sideOffset === 0 ? startColumn : 0
-    for (let column = fromColumn; column < WALL_COLUMNS; column += 1) {
-      mutableSlots.push({ side: side as SeatId, column, level: 1 })
-      mutableSlots.push({ side: side as SeatId, column, level: 0 })
+  const pushStack = (side: SeatId, column: number) => {
+    mutableSlots.push({ side, column, level: 1 })
+    mutableSlots.push({ side, column, level: 0 })
+  }
+  const LIVE_STACKS = LIVE_WALL_SIZE / 2
+  const DEAD_STACKS = DEAD_WALL_SIZE / 2
+  // 生牌: 割れ目の左から列を減らす方向へ。角を越えたら側を1つ戻して列16から続ける。
+  const mutableLive = { side: breakSide as SeatId, column: breakColumn }
+  for (let i = 0; i < LIVE_STACKS; i += 1) {
+    pushStack(mutableLive.side, mutableLive.column)
+    mutableLive.column -= 1
+    if (mutableLive.column < 0) {
+      mutableLive.side = ((((mutableLive.side + 3) % 4) + 4) % 4) as SeatId
+      mutableLive.column = WALL_COLUMNS - 1
     }
   }
-  const breakSideTyped = breakSide as SeatId
-  for (let column = 0; column < startColumn; column += 1) {
-    mutableSlots.push({ side: breakSideTyped, column, level: 1 })
-    mutableSlots.push({ side: breakSideTyped, column, level: 0 })
+  // 王牌: 割れ目の右から列を増やす方向へ（割れ目側から外側へ）。
+  const mutableDead = { side: breakSide as SeatId, column: breakColumn + 1 }
+  if (mutableDead.column >= WALL_COLUMNS) {
+    mutableDead.side = ((((mutableDead.side + 1) % 4) + 4) % 4) as SeatId
+    mutableDead.column = 0
+  }
+  for (let i = 0; i < DEAD_STACKS; i += 1) {
+    pushStack(mutableDead.side, mutableDead.column)
+    mutableDead.column += 1
+    if (mutableDead.column >= WALL_COLUMNS) {
+      mutableDead.side = ((((mutableDead.side + 1) % 4) + 4) % 4) as SeatId
+      mutableDead.column = 0
+    }
   }
   return mutableSlots
 }
@@ -151,10 +173,22 @@ export const riverTilePose = (
   seat: SeatId,
   index: number,
   riichiTilt: boolean,
+  riichiIndex: number | null = null,
 ): Pose => {
-  const row = Math.min(Math.floor(index / 6), 3)
-  const column = row >= 3 ? index - 18 + 6 : index % 6
-  const localX = (column - 2.5) * RIVER_PITCH + (riichiTilt ? 0.03 : 0)
+  // 河は1段6枚。3段目以降は到達することがほとんどないが、3段目を右へ延長する
+  // （実卓と同じく段を増やさない）慣習に合わせる。
+  const row = Math.min(Math.floor(index / 6), 2)
+  const column = row >= 2 ? index - 12 : index % 6
+  // 横向き（リーチ宣言）牌は牌長(0.26)ぶん幅を取るため、同じ段でその牌より後ろの
+  // 牌を牌長-牌幅(0.06)だけ右へずらして重なりを防ぐ。宣言牌自体は半幅(0.03)右へ。
+  const tiltShift = riichiTilt ? (TILE_LENGTH - TILE_WIDTH) / 2 : 0
+  const pushedByRiichi =
+    riichiIndex !== null &&
+    index > riichiIndex &&
+    Math.min(Math.floor(riichiIndex / 6), 2) === row
+      ? TILE_LENGTH - TILE_WIDTH
+      : 0
+  const localX = (column - 2.5) * RIVER_PITCH + tiltShift + pushedByRiichi
   const localZ = RIVER_EDGE_Z + row * RIVER_ROW_PITCH
   return lyingPose(
     seat,
@@ -180,6 +214,8 @@ export interface LayoutContext {
   readonly dice: readonly [number, number] | null
   readonly dealer: SeatId
   readonly userSeat: SeatId
+  // 各席のリーチ宣言牌の河インデックス（未宣言は null）。横向き牌の後続を右へ寄せるため。
+  readonly riichiRiverIndex?: readonly (number | null)[]
 }
 
 export const tilePoseFor = (zone: TileZone, ctx: LayoutContext): Pose => {
@@ -199,7 +235,12 @@ export const tilePoseFor = (zone: TileZone, ctx: LayoutContext): Pose => {
     case 'handStaging':
       return stagingTilePose(zone.seat, zone.index)
     case 'river':
-      return riverTilePose(zone.seat, zone.index, zone.riichiTilt)
+      return riverTilePose(
+        zone.seat,
+        zone.index,
+        zone.riichiTilt,
+        ctx.riichiRiverIndex?.[zone.seat] ?? null,
+      )
     case 'winReveal':
       return winRevealPose(zone.seat, zone.index)
   }

@@ -58,6 +58,8 @@ interface SeatState {
   readonly riichi: 'none' | 'riichi' | 'double'
   readonly ippatsuActive: boolean
   readonly discardCount: number
+  // 役なしで自分の待ち牌を見逃した直後の同巡内フリテン（次のツモまでロン不可）。
+  readonly temporaryFuriten: boolean
 }
 
 const buildWinInput = (
@@ -69,6 +71,7 @@ const buildWinInput = (
   seatState: SeatState,
   isLastTile: boolean,
   kyotakuNow: number,
+  isFirstDraw: boolean,
 ) => ({
   concealed: concealed.map((t) => t.tile),
   melds: [],
@@ -81,8 +84,9 @@ const buildWinInput = (
     houtei: winType === 'ron' && isLastTile,
     rinshan: false,
     chankan: false,
-    tenhou: false,
-    chiihou: false,
+    // 鳴きなしのため、第一ツモ和了は親=天和・子=地和。
+    tenhou: winType === 'tsumo' && isFirstDraw && seat === ctx.config.dealer,
+    chiihou: winType === 'tsumo' && isFirstDraw && seat !== ctx.config.dealer,
     seatWind: seatWindFor(seat, ctx.config.dealer),
     roundWind: ctx.config.round,
   },
@@ -213,6 +217,7 @@ export const simulateKyoku = (
     riichi: 'none' as const,
     ippatsuActive: false,
     discardCount: 0,
+    temporaryFuriten: false,
   }))
   const mutableScores = { value: config.scores }
   const mutableKyotaku = { value: config.kyotaku }
@@ -285,6 +290,7 @@ export const simulateKyoku = (
         seatState,
         isLastTile,
         mutableKyotaku.value,
+        seatState.discardCount === 0,
       ),
     )
     if (tsumoOutcome.ok) {
@@ -315,8 +321,11 @@ export const simulateKyoku = (
       hand: remainingHand,
       river: [...seatState.river, discardTile],
       discardCount: seatState.discardCount + 1,
+      // この巡で自摸ったため、前巡の見逃しによる同巡内フリテンは解除される。
+      temporaryFuriten: false,
     }
 
+    const mutableMissedRon: SeatId[] = []
     for (const other of turnOrderFrom(nextSeat(seat))) {
       if (other === seat) {
         continue
@@ -333,7 +342,7 @@ export const simulateKyoku = (
       const furiten = otherState.river.some((t) =>
         waits.includes(tileToIndex(t.tile)),
       )
-      if (furiten) {
+      if (furiten || otherState.temporaryFuriten) {
         continue
       }
       const ronOutcome = calculateScore(
@@ -346,6 +355,7 @@ export const simulateKyoku = (
           otherState,
           isLastTile,
           mutableKyotaku.value,
+          false,
         ),
       )
       if (ronOutcome.ok) {
@@ -353,6 +363,14 @@ export const simulateKyoku = (
           finishWin(other, 'ron', seat, discardTile, ronOutcome.result),
           rngOut,
         ]
+      }
+      // 待ち牌だが役なしで和了不可。次の自摸まで同巡内フリテン。
+      mutableMissedRon.push(other)
+    }
+    for (const missed of mutableMissedRon) {
+      mutableSeats[missed] = {
+        ...(mutableSeats[missed] as SeatState),
+        temporaryFuriten: true,
       }
     }
 

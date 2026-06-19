@@ -3,7 +3,11 @@ import type {
   ScenarioEvent,
   TileZone,
 } from '@/core/sim/scenarioEvents'
-import { applyEvent, INITIAL_BOARD } from '@/core/sim/scenarioEvents'
+import {
+  applyEvent,
+  INITIAL_BOARD,
+  riichiRiverIndexOf,
+} from '@/core/sim/scenarioEvents'
 import type { LayoutContext, Pose } from '@/core/sim/boardLayout'
 import { INSIDE_MACHINE_POSE, tilePoseFor } from '@/core/sim/boardLayout'
 import type { SeatId } from '@/core/sim/seatTypes'
@@ -39,6 +43,7 @@ interface CompileCursor {
   readonly dice: readonly [number, number]
   readonly drawCountInKyoku: number
   readonly kyokuIndex: number
+  readonly userSeat: SeatId
   readonly cameraState: CameraScriptState
   readonly captionState: CaptionScriptState
   readonly lastCaptionEnd: number
@@ -75,7 +80,7 @@ const eventDuration = (
     case 'boardSnapshot':
       return 1.6
     case 'draw':
-      return event.seat === 1
+      return event.seat === cursor.userSeat
         ? compressed
           ? 0.9
           : 1.3
@@ -109,7 +114,8 @@ const layoutCtx = (
 ): LayoutContext => ({
   dice: cursor.dice,
   dealer: cursor.dealer,
-  userSeat: 1,
+  userSeat: cursor.userSeat,
+  riichiRiverIndex: riichiRiverIndexOf(cursor.board),
 })
 
 interface MoveTiming {
@@ -123,17 +129,18 @@ const moveTiming = (
   event: ScenarioEvent,
   afterZone: TileZone | null,
   rank: number,
+  count: number,
+  eventDur: number,
 ): MoveTiming => {
   switch (event.kind) {
     case 'wallRise':
       return { start: 0.6, duration: 1.2, arcHeight: 0, easing: 'outQuint' }
-    case 'dealBlock':
-      return {
-        start: 0.05 + rank * 0.04,
-        duration: 0.4,
-        arcHeight: 0.35,
-        easing: 'outQuint',
-      }
+    case 'dealBlock': {
+      // 牌の着地がイベント長を超えないよう飛行時間をクランプ（圧縮局対策）。
+      const start = 0.05 + rank * 0.04
+      const duration = Math.max(0.12, Math.min(0.4, eventDur - start))
+      return { start, duration, arcHeight: 0.35, easing: 'outQuint' }
+    }
     case 'dealDora':
       return {
         start: 0.3,
@@ -141,13 +148,16 @@ const moveTiming = (
         arcHeight: 0.3,
         easing: 'inOutCubic',
       }
-    case 'dealSort':
+    case 'dealSort': {
+      // 全牌の整列がイベント長に収まるようスタッガ間隔を動的に縮める。
+      const stagger = Math.min(0.05, (eventDur - 0.6) / Math.max(count - 1, 1))
       return {
-        start: 0.1 + rank * 0.05,
+        start: 0.1 + rank * Math.max(0, stagger),
         duration: 0.5,
         arcHeight: 0.25,
         easing: 'outQuint',
       }
+    }
     case 'draw':
       return { start: 0, duration: 0.5, arcHeight: 0.35, easing: 'outQuint' }
     case 'discard':
@@ -246,8 +256,9 @@ const tileClipsFor = (
   }
 
   const sorted = [...mutableMoves].sort((a, b) => a.sortKey - b.sortKey)
+  const eventDur = eventDuration(event, cursor)
   return sorted.map((move, rank) => {
-    const timing = moveTiming(event, move.afterZone, rank)
+    const timing = moveTiming(event, move.afterZone, rank, sorted.length, eventDur)
     return {
       track: 'tile' as const,
       tileId: move.tileId,
@@ -358,6 +369,7 @@ export const compileTimeline = (
       dice: FALLBACK_DICE,
       drawCountInKyoku: 0,
       kyokuIndex: 0,
+      userSeat: scenario.userSeat,
       cameraState: INITIAL_CAMERA_STATE,
       captionState: INITIAL_CAPTION_STATE,
       lastCaptionEnd: 0,
@@ -396,7 +408,14 @@ export const compileTimeline = (
                   cursorBefore.board.kyotaku + 1,
                 ),
               }
-            : {}
+            : event.kind === 'boardSnapshot'
+              ? {
+                  captionState: trackKyotakuBeforeWin(
+                    cursorBefore.captionState,
+                    event.board.kyotaku,
+                  ),
+                }
+              : {}
     const cursor: CompileCursor = { ...cursorBefore, ...updatedMeta }
     const t = mutableTime.value
     const duration = eventDuration(event, cursor)
@@ -439,6 +458,7 @@ export const compileTimeline = (
 
     const captionResult = captionFor(event, cursor.captionState, {
       userSeat: scenario.userSeat,
+      honba: cursor.board.honba,
     })
     const mutableLastCaptionEnd = { value: cursor.lastCaptionEnd }
     if (captionResult.spec !== null) {
@@ -463,6 +483,10 @@ export const compileTimeline = (
         break
       case 'dealBlock':
         addChapter('deal', '配牌', eventIndex)
+        break
+      case 'discard':
+        // 親の第一打は draw を伴わない。対局開始チャプターを最初の打牌に合わせる。
+        addChapter('play', '対局開始', eventIndex)
         break
       case 'draw':
         addChapter('play', '対局開始', eventIndex)

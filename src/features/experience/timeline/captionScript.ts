@@ -36,15 +36,20 @@ const seatLabel = (seat: SeatId): string => SEAT_LABELS[seat] ?? ''
 const roundLabel = (round: Wind, kyoku: number): string =>
   `${round === 1 ? '東' : '南'}${kyoku}局`
 
-const paymentText = (result: ScoreResult): string => {
+// 符・翻から導く素点（本場ぶんを除く）。本場は別途 honba×300 を和了者へ加算するため、
+// 符翻→点数の対応を学べるよう本場を含めない値を表示する。
+const paymentText = (result: ScoreResult, honba: number): string => {
   const p = result.points.payments
   if (p.type === 'ron') {
-    return `${p.fromDiscarder.toLocaleString()}点`
+    return `${(p.fromDiscarder - honba * 300).toLocaleString()}点`
   }
   if (p.type === 'tsumo-dealer') {
-    return `${p.fromEach.toLocaleString()}点オール`
+    return `${(p.fromEach - honba * 100).toLocaleString()}点オール`
   }
-  return `${p.fromOthers.toLocaleString()}/${p.fromDealer.toLocaleString()}`
+  return `${(p.fromOthers - honba * 100).toLocaleString()}/${(
+    p.fromDealer -
+    honba * 100
+  ).toLocaleString()}`
 }
 
 interface CaptionResult {
@@ -67,7 +72,7 @@ const once = (
 export const captionFor = (
   event: ScenarioEvent,
   state: CaptionScriptState,
-  context: { readonly userSeat: SeatId },
+  context: { readonly userSeat: SeatId; readonly honba: number },
 ): CaptionResult => {
   switch (event.kind) {
     case 'machineStart':
@@ -287,7 +292,13 @@ export const captionFor = (
         const result = state.lastWin
         const fuPart = result.isYakuman
           ? '役満'
-          : `${result.totalHan}翻${result.fu !== null ? `${result.fu.rounded}符` : ''}`
+          : `${result.fu !== null ? `${result.fu.rounded}符` : ''}${result.totalHan}翻`
+        const honbaPart =
+          context.honba > 0
+            ? ` ＋${context.honba}本場で${(
+                context.honba * 300
+              ).toLocaleString()}点が和了者に加算されます。`
+            : ''
         const kyotakuPart =
           state.kyotakuBeforeWin > 0
             ? ` 供託のリーチ棒${state.kyotakuBeforeWin}本も和了者がもらいます。`
@@ -296,7 +307,7 @@ export const captionFor = (
           spec: {
             segments: [
               emphasis(fuPart),
-              text(`で${paymentText(result)}。${kyotakuPart}`),
+              text(`で${paymentText(result, context.honba)}。${honbaPart}${kyotakuPart}`),
             ],
             minDuration: 5,
             learning: true,

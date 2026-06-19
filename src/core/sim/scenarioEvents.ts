@@ -433,3 +433,20 @@ export const boardAt = (
   uptoIndex: number,
 ): BoardState =>
   events.slice(0, uptoIndex).reduce(applyEvent, INITIAL_BOARD)
+
+// 各席のリーチ宣言牌（横向き）の河インデックス。未宣言は null。
+export const riichiRiverIndexOf = (
+  board: BoardState,
+): readonly (number | null)[] => {
+  const mutableIndex: (number | null)[] = [null, null, null, null]
+  for (const placed of board.tiles.values()) {
+    if (placed.zone.kind === 'river' && placed.zone.riichiTilt) {
+      const seat = placed.zone.seat
+      const current = mutableIndex[seat]
+      if (current === null || current === undefined || placed.zone.index < current) {
+        mutableIndex[seat] = placed.zone.index
+      }
+    }
+  }
+  return mutableIndex
+}

@@ -1,6 +1,6 @@
 import { createRng } from '../tiles/random'
 import type { TileInstance } from '../tiles/tile'
-import type { Wind } from '../score/types'
+import type { Payments, Wind } from '../score/types'
 import type { SeatId } from './seatTypes'
 import { nextSeat, SEAT_LABELS, USER_SEAT } from './seatTypes'
 import type {
@@ -35,12 +35,24 @@ export interface HalfGameScenario {
 
 const TAIL_DRAW_COUNT = 6
 
+// 供託（リーチ棒）は和了点とは別枠で受け取るため、見出しの「N点」には含めない。
+// 本場ぶん（各支払いに加算済み）は慣行どおり和了点に含める。
+const handPointsOf = (payments: Payments): number => {
+  if (payments.type === 'ron') {
+    return payments.fromDiscarder
+  }
+  if (payments.type === 'tsumo-dealer') {
+    return payments.fromEach * 3
+  }
+  return payments.fromDealer + payments.fromOthers * 2
+}
+
 const paymentLabelOf = (outcome: KyokuOutcome): string => {
   if (outcome.result.type === 'draw') {
     return `流局（テンパイ${outcome.result.tenpaiSeats.length}人）`
   }
   const { seat, winType, result } = outcome.result
-  const total = result.points.payments.total.toLocaleString()
+  const total = handPointsOf(result.points.payments).toLocaleString()
   const how = winType === 'tsumo' ? 'ツモ' : 'ロン'
   return `${SEAT_LABELS[seat]}が${total}点を${how}和了`
 }
